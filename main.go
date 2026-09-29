@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -287,15 +288,16 @@ func isGlobPattern(s string) bool {
 }
 
 // resolveAllFiles collects files from all configured directories/globs,
-// rebuilds the fileMap, and returns display names.
+// rebuilds the fileMap, and returns display names sorted by modification time (newest first).
 // When the same filename appears in multiple directories, it is disambiguated
 // with a "parentDir/filename" prefix.
 func resolveAllFiles() ([]string, map[string]string, error) {
 	dirs := parseLogDirs()
 
 	type fileEntry struct {
-		name     string // base filename
+		name     string    // base filename
 		fullPath string
+		modTime  time.Time // modification time for sorting
 	}
 	var allFiles []fileEntry
 
@@ -311,7 +313,7 @@ func resolveAllFiles() ([]string, map[string]string, error) {
 				if err != nil || info.IsDir() {
 					continue
 				}
-				allFiles = append(allFiles, fileEntry{name: filepath.Base(m), fullPath: m})
+				allFiles = append(allFiles, fileEntry{name: filepath.Base(m), fullPath: m, modTime: info.ModTime()})
 			}
 		} else {
 			entries, err := os.ReadDir(dir)
@@ -323,9 +325,14 @@ func resolveAllFiles() ([]string, map[string]string, error) {
 				if e.IsDir() {
 					continue
 				}
+				info, err := e.Info()
+				if err != nil {
+					continue
+				}
 				allFiles = append(allFiles, fileEntry{
 					name:     e.Name(),
 					fullPath: filepath.Join(dir, e.Name()),
+					modTime:  info.ModTime(),
 				})
 			}
 		}
@@ -337,21 +344,38 @@ func resolveAllFiles() ([]string, map[string]string, error) {
 		nameCount[f.name]++
 	}
 
-	// Build display-name → full-path map
-	resultMap := make(map[string]string)
+	// Build display-name → full-path map and collect sortable entries
+	type namedEntry struct {
+		displayName string
+		fullPath    string
+		modTime     time.Time
+	}
+	var sortable []namedEntry
+
 	for _, f := range allFiles {
 		displayName := f.name
 		if nameCount[f.name] > 1 {
 			parentDir := filepath.Base(filepath.Dir(f.fullPath))
 			displayName = parentDir + "/" + f.name
 		}
-		resultMap[displayName] = f.fullPath
+		sortable = append(sortable, namedEntry{
+			displayName: displayName,
+			fullPath:    f.fullPath,
+			modTime:     f.modTime,
+		})
 	}
 
-	// Collect display names
+	// Sort by modification time descending (newest first)
+	sort.Slice(sortable, func(i, j int) bool {
+		return sortable[i].modTime.After(sortable[j].modTime)
+	})
+
+	// Build result map and ordered names
+	resultMap := make(map[string]string)
 	var names []string
-	for name := range resultMap {
-		names = append(names, name)
+	for _, e := range sortable {
+		resultMap[e.displayName] = e.fullPath
+		names = append(names, e.displayName)
 	}
 
 	return names, resultMap, nil
