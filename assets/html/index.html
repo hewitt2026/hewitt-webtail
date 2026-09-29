@@ -78,6 +78,16 @@
                         <input class="form-check-input" type="checkbox" id="auto-scroll" checked />
                         <label class="form-check-label" for="auto-scroll">Auto-scroll</label>
                     </div>
+                    <div class="input-group me-3" style="width: auto;">
+                        <label class="input-group-text" for="buffer-size" style="font-size: 0.85rem;">Buffer:</label>
+                        <select class="form-select form-select-sm" id="buffer-size" onchange="changeBufferSize()" style="width: auto;">
+                            <option value="32768">32 KB</option>
+                            <option value="131072">128 KB</option>
+                            <option value="262144">256 KB</option>
+                            <option value="524288">512 KB</option>
+                            <option value="1048576">1 MB</option>
+                        </select>
+                    </div>
                     <button class="btn btn-outline-secondary" onclick="downloadCurrentFile()" title="Download Log File" id="download-btn" disabled>
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16">
                             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
@@ -119,7 +129,7 @@
             let isTailing = false;
             let tailCancel = false;
             let fullLogContent = []; // Store the complete log content
-            const MAX_BUFFER_SIZE = 32 * 1024; // 32KB max buffer size
+            let MAX_BUFFER_SIZE = 32 * 1024; // 32KB default, user-adjustable
 
             // Connect to WebSocket
             function connectWebSocket() {
@@ -409,6 +419,16 @@
                     const fileSelect = document.getElementById("file-select");
                     fileSelect.innerHTML =
                         '<option value="">Loading files...</option>';
+                }
+            }
+
+            // Change buffer size from dropdown
+            function changeBufferSize() {
+                const select = document.getElementById("buffer-size");
+                MAX_BUFFER_SIZE = parseInt(select.value, 10);
+                trimBufferIfNeeded();
+                if (fullLogContent.length > 0) {
+                    renderLogContent();
                 }
             }
 
