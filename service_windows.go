@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-const serviceName = "plmWebTail"
+const serviceName = "plm-WebTail"
 
 // isService returns true if the current process is running as a Windows service
 func isService() bool {
