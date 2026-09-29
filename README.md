@@ -151,7 +151,7 @@ uninstall-service.bat
 
 ### Prerequisites
 
-- Go 1.20+ (Go 1.20 recommended for Windows Server 2012 R2 compatibility)
+- Go (version as specified in `go.mod`)
 - [Gorilla WebSocket](https://github.com/gorilla/websocket) package
 
 ### Build Instructions
