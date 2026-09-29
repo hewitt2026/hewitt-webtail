@@ -897,6 +897,72 @@ func TestListFilesMultiDir(t *testing.T) {
 	}
 }
 
+// TestDownloadFile tests the download file endpoint
+func TestDownloadFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "webtail-download")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testContent := []byte("log line 1\nlog line 2\nlog line 3\n")
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.log"), testContent, 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+	config.LogDir = tmpDir
+
+	// Populate fileMap
+	_, err = getFileList()
+	if err != nil {
+		t.Fatalf("getFileList failed: %v", err)
+	}
+
+	// Test successful download
+	req := httptest.NewRequest("GET", "/api/download?file=test.log", nil)
+	w := httptest.NewRecorder()
+	downloadFile(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	contentDisp := w.Header().Get("Content-Disposition")
+	if !strings.Contains(contentDisp, "test.log") {
+		t.Errorf("Expected Content-Disposition to contain 'test.log', got '%s'", contentDisp)
+	}
+
+	if w.Body.String() != string(testContent) {
+		t.Errorf("Expected body '%s', got '%s'", string(testContent), w.Body.String())
+	}
+
+	// Test missing file parameter
+	req = httptest.NewRequest("GET", "/api/download", nil)
+	w = httptest.NewRecorder()
+	downloadFile(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for missing file param, got %d", w.Code)
+	}
+
+	// Test non-existent file
+	req = httptest.NewRequest("GET", "/api/download?file=nonexistent.log", nil)
+	w = httptest.NewRecorder()
+	downloadFile(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404 for non-existent file, got %d", w.Code)
+	}
+
+	// Test wrong method
+	req = httptest.NewRequest("POST", "/api/download?file=test.log", nil)
+	w = httptest.NewRecorder()
+	downloadFile(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405 for POST, got %d", w.Code)
+	}
+}
+
 // TestMiddleware tests the logging middleware
 func TestMiddleware(t *testing.T) {
 	// Create a test handler that just returns 200 OK

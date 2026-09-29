@@ -132,6 +132,7 @@ func main() {
 	loggedMux := http.NewServeMux()
 	loggedMux.HandleFunc("/", serveHome)
 	loggedMux.HandleFunc("/api/files", listFiles)
+	loggedMux.HandleFunc("/api/download", downloadFile)
 	loggedMux.HandleFunc("/ws", handleWebSocket)
 
 	// Add route to serve embedded bootstrap.min.css
@@ -301,6 +302,52 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(fileInfos); err != nil {
 		http.Error(w, fmt.Sprintf("Error encoding JSON: %v", err), http.StatusInternalServerError)
+	}
+}
+
+// downloadFile handles downloading a log file
+func downloadFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	fileName := r.URL.Query().Get("file")
+	if fileName == "" {
+		http.Error(w, "Missing 'file' parameter", http.StatusBadRequest)
+		return
+	}
+
+	filePath := resolveFilePath(fileName)
+
+	// Verify the file exists and is accessible
+	info, err := os.Stat(filePath)
+	if err != nil {
+		http.Error(w, "File not found: "+fileName, http.StatusNotFound)
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "Cannot download a directory", http.StatusBadRequest)
+		return
+	}
+
+	// Use the base name for the downloaded file
+	downloadName := filepath.Base(filePath)
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, downloadName))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "Failed to open file", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	buf := make([]byte, 32*1024)
+	if _, err := io.CopyBuffer(w, file, buf); err != nil {
+		log.Printf("Error streaming file %s: %v", fileName, err)
 	}
 }
 
