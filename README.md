@@ -9,13 +9,16 @@ A simple, lightweight web-based log file viewer with real-time log tailing via W
 
 - **Web-based log viewer** - Access your logs from any browser
 - **Real-time updates** - See new log entries immediately as they're written
-- **No external dependencies** - Can work in on-prem environment
+- **Multiple log sources** - Monitor files across multiple directories and glob patterns
+- **File download** - Download log files directly from the browser
+- **Basic authentication** - Protect access with HTTP Basic Auth (multi-user support)
+- **Adjustable buffer** - Choose how much log content to keep in the browser (32KB - 1MB)
+- **Adjustable refresh rate** - Configure file check interval from the UI (500ms - 5000ms)
 - **Syntax highlighting** - Highlight specific text patterns for easier reading
-- **Adjustable display** - Configure how many lines to show
-- **Full-width viewing** - Maximize screen space for log content
-- **Start/Stop controls** - Pause updates when needed
+- **File sorting** - File list sorted by modification time (newest first)
 - **Auto-scroll** - Automatically follow new log entries
-- **Status indicators** - See connection status and view metrics
+- **No external dependencies** - Can work in on-prem environment
+- **Windows service** - Can be installed as a Windows service with auto-restart
 
 ## Quick Start
 
@@ -68,9 +71,11 @@ WebTail can be configured through environment variables or command-line flags:
 |----------------------|-----------------|--------------------------------------------|--------------:|
 | `LOG_DIR`            | `-logdir`       | Log directories and file patterns (see below) | `/logs`    |
 | (none)               | `-port`         | HTTP server port                           | `8080`        |
-| (none)               | `-refreshrate`  | File check interval in milliseconds        | `500`         |
-| (none)               | `-buffersize`   | Buffer size for reading file updates (bytes) | `4096`      |
+| (none)               | `-refreshrate`  | File check interval in milliseconds        | `1000`        |
+| (none)               | `-buffersize`   | Buffer size for reading file updates (bytes) | `32768`     |
 | `WEBTAIL_AUTH`       | `-auth`         | Basic auth credentials (see below)         | (none)      |
+
+> **Note**: The `-refreshrate` and buffer size can also be adjusted from the web UI at runtime.
 
 ### Multiple Directories and Glob Patterns
 
@@ -112,17 +117,41 @@ Passwords may contain colons (only the first colon separates user from password)
 
 ## Usage
 
-1. **Select a log file** - Choose from the dropdown menu
-2. **Start tailing** - Click the "Start" button to begin monitoring
+1. **Select a log file** - Choose from the dropdown menu (files sorted by modification time, newest first)
+2. **Tail in real-time** - Logs are streamed automatically via WebSocket
 3. **Highlight text** - Enter text to highlight across all log entries
-4. **Adjust settings** - Change max lines to display or toggle auto-scroll
-5. **Stop tailing** - Pause updates with the "Stop" button
+4. **Adjust buffer** - Choose display buffer size (32KB - 1MB) from the toolbar
+5. **Adjust refresh rate** - Choose file check interval (500ms - 5000ms) from the toolbar
+6. **Download** - Click the download button to save the log file
+7. **Copy** - Copy displayed log content to clipboard
+8. **Auto-scroll** - Toggle to automatically follow new log entries
+
+## Deploying as Windows Service
+
+On Windows Server, gWebTail can be installed as a system service with auto-restart on failure.
+
+```batch
+:: Run install-service.bat as Administrator
+install-service.bat
+
+:: Or manually:
+sc create plmWebTail binPath= "\"C:\WebTail\gwebtail.exe\" -port 20000 -logdir \"D:\logs\*.log\" --auth admin:123456" start= auto
+sc failure plmWebTail reset= 86400 actions= restart/5000
+sc start plmWebTail
+```
+
+To remove the service:
+
+```batch
+:: Run uninstall-service.bat as Administrator
+uninstall-service.bat
+```
 
 ## Building from Source
 
 ### Prerequisites
 
-- Go 1.16+
+- Go 1.20+ (Go 1.20 recommended for Windows Server 2012 R2 compatibility)
 - [Gorilla WebSocket](https://github.com/gorilla/websocket) package
 
 ### Build Instructions
