@@ -112,7 +112,19 @@ func main() {
 	flag.IntVar(&config.FileRefreshRate, "refreshrate", 1000, "File check interval in milliseconds")
 	flag.Int64Var(&config.BufferSize, "buffersize", 32*1024, "Buffer size for reading file updates (bytes)")
 	flag.StringVar(&config.Auth, "auth", "", "Basic auth credentials (user:password), multiple separated by , or ;")
+	var logFile string
+	flag.StringVar(&logFile, "logfile", "", "Log file path (default: stderr)")
 	flag.Parse()
+
+	// Redirect log output to file if specified
+	if logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatalf("Failed to open log file %s: %v", logFile, err)
+		}
+		defer f.Close()
+		log.SetOutput(f)
+	}
 
 	// Check if logdir is set from environment variable
 	if config.LogDir == "" {
@@ -139,6 +151,17 @@ func main() {
 		}
 	}
 
+	// Check if running as Windows service
+	if isService() {
+		runService()
+		return
+	}
+
+	runServer()
+}
+
+// runServer sets up and starts the HTTP server
+func runServer() {
 	// Set up HTTP handlers with logging middleware
 	loggedMux := http.NewServeMux()
 	loggedMux.HandleFunc("/", serveHome)
