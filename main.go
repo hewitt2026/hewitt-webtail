@@ -8,7 +8,9 @@
 package main
 
 import (
+	"crypto/subtle"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -36,6 +38,7 @@ type Config struct {
 	Port            int
 	FileRefreshRate int // Milliseconds between file checks
 	BufferSize      int64
+	Auth            string // Auth credentials in user:password format, multiple separated by , or ;
 }
 
 // FileInfo struct for listing files
@@ -106,6 +109,7 @@ func main() {
 	flag.IntVar(&config.Port, "port", 8080, "HTTP server port")
 	flag.IntVar(&config.FileRefreshRate, "refreshrate", 500, "File check interval in milliseconds")
 	flag.Int64Var(&config.BufferSize, "buffersize", 32*1024, "Buffer size for reading file updates (bytes)")
+	flag.StringVar(&config.Auth, "auth", "", "Basic auth credentials (user:password), multiple separated by , or ;")
 	flag.Parse()
 
 	// Check if logdir is set from environment variable
@@ -114,6 +118,11 @@ func main() {
 		if config.LogDir == "" {
 			config.LogDir = "/logs" // Default value
 		}
+	}
+
+	// Check if auth is set from environment variable
+	if config.Auth == "" {
+		config.Auth = os.Getenv("WEBTAIL_AUTH")
 	}
 
 	// Create log directories if they don't exist (skip glob patterns)
@@ -142,12 +151,21 @@ func main() {
 	})
 
 	// Create middleware to log HTTP requests
-	loggedHandler := logRequestMiddleware(loggedMux)
+	var handler http.Handler = logRequestMiddleware(loggedMux)
+
+	// Wrap with basic auth middleware if credentials are configured
+	if config.Auth != "" {
+		creds := parseAuthCredentials()
+		if len(creds) > 0 {
+			handler = basicAuthMiddleware(handler, creds)
+			log.Printf("Basic auth enabled with %d credential(s)", len(creds))
+		}
+	}
 
 	// Start HTTP server
 	addr := fmt.Sprintf(":%d", config.Port)
 	log.Printf("Starting WebTail server on %s with log directory: %s", addr, config.LogDir)
-	if err := http.ListenAndServe(addr, loggedHandler); err != nil {
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
 }
@@ -159,6 +177,72 @@ func logRequestMiddleware(next http.Handler) http.Handler {
 		log.Printf("HTTP %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 		next.ServeHTTP(w, r)
 		log.Printf("HTTP %s %s completed in %v", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+// parseAuthCredentials splits Auth by ',' or ';' and returns a user→password map
+func parseAuthCredentials() map[string]string {
+	result := make(map[string]string)
+	parts := strings.FieldsFunc(config.Auth, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		idx := strings.Index(part, ":")
+		if idx <= 0 || idx >= len(part)-1 {
+			log.Printf("Invalid auth credential format (expected user:password): '%s'", part)
+			continue
+		}
+		user := strings.TrimSpace(part[:idx])
+		pass := strings.TrimSpace(part[idx+1:])
+		if user != "" && pass != "" {
+			result[user] = pass
+		}
+	}
+	return result
+}
+
+// basicAuthMiddleware enforces HTTP Basic Authentication
+func basicAuthMiddleware(next http.Handler, creds map[string]string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract credentials from the Authorization header
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="gWebTail"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// Expect "Basic <base64>"
+		if !strings.HasPrefix(authHeader, "Basic ") {
+			http.Error(w, "Unsupported auth scheme", http.StatusUnauthorized)
+			return
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(authHeader[6:])
+		if err != nil {
+			http.Error(w, "Invalid credentials encoding", http.StatusUnauthorized)
+			return
+		}
+
+		parts := strings.SplitN(string(decoded), ":", 2)
+		if len(parts) != 2 {
+			http.Error(w, "Invalid credentials format", http.StatusUnauthorized)
+			return
+		}
+
+		user, pass := parts[0], parts[1]
+		expectedPass, ok := creds[user]
+		if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(expectedPass)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="gWebTail"`)
+			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
 	})
 }
 

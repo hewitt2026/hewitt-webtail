@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -960,6 +961,216 @@ func TestDownloadFile(t *testing.T) {
 	downloadFile(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Expected status 405 for POST, got %d", w.Code)
+	}
+}
+
+// TestParseAuthCredentials tests the parseAuthCredentials function
+func TestParseAuthCredentials(t *testing.T) {
+	oldAuth := config.Auth
+	defer func() { config.Auth = oldAuth }()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected map[string]string
+	}{
+		{
+			name:     "single credential",
+			input:    "admin:123456",
+			expected: map[string]string{"admin": "123456"},
+		},
+		{
+			name:     "comma separated",
+			input:    "admin:123456,user:pass",
+			expected: map[string]string{"admin": "123456", "user": "pass"},
+		},
+		{
+			name:     "semicolon separated",
+			input:    "admin:123456;user:pass",
+			expected: map[string]string{"admin": "123456", "user": "pass"},
+		},
+		{
+			name:     "mixed separators",
+			input:    "admin:123456,user:pass;viewer:123",
+			expected: map[string]string{"admin": "123456", "user": "pass", "viewer": "123"},
+		},
+		{
+			name:     "with spaces",
+			input:    " admin:123456 , user:pass ",
+			expected: map[string]string{"admin": "123456", "user": "pass"},
+		},
+		{
+			name:     "password with colon",
+			input:    "admin:pass:word:123",
+			expected: map[string]string{"admin": "pass:word:123"},
+		},
+		{
+			name:     "invalid format - no colon",
+			input:    "admin123456",
+			expected: map[string]string{},
+		},
+		{
+			name:     "invalid format - empty user",
+			input:    ":123456",
+			expected: map[string]string{},
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config.Auth = tt.input
+			result := parseAuthCredentials()
+			if len(result) != len(tt.expected) {
+				t.Errorf("Expected %d entries, got %d: %v", len(tt.expected), len(result), result)
+				return
+			}
+			for k, v := range tt.expected {
+				if result[k] != v {
+					t.Errorf("Expected user '%s' to have password '%s', got '%s'", k, v, result[k])
+				}
+			}
+		})
+	}
+}
+
+// TestBasicAuthMiddleware tests the basic auth middleware
+func TestBasicAuthMiddleware(t *testing.T) {
+	creds := map[string]string{"admin": "123456"}
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	handler := basicAuthMiddleware(testHandler, creds)
+
+	// Test: no auth header
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 without auth header, got %d", w.Code)
+	}
+	if w.Header().Get("WWW-Authenticate") == "" {
+		t.Errorf("Expected WWW-Authenticate header")
+	}
+
+	// Test: valid credentials
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("admin:123456")))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200 with valid credentials, got %d", w.Code)
+	}
+
+	// Test: wrong password
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("admin:wrong")))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 with wrong password, got %d", w.Code)
+	}
+
+	// Test: wrong user
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("unknown:123456")))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 with wrong user, got %d", w.Code)
+	}
+
+	// Test: invalid base64
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic not-valid-base64!!!")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 with invalid base64, got %d", w.Code)
+	}
+
+	// Test: non-Basic scheme
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer some-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 with Bearer scheme, got %d", w.Code)
+	}
+}
+
+// TestBasicAuthIntegration tests that auth protects all endpoints
+func TestBasicAuthIntegration(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "webtail-auth")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	os.WriteFile(filepath.Join(tmpDir, "test.log"), []byte("test log"), 0644)
+
+	oldAuth := config.Auth
+	oldLogDir := config.LogDir
+	defer func() {
+		config.Auth = oldAuth
+		config.LogDir = oldLogDir
+	}()
+
+	config.Auth = "admin:secret"
+	config.LogDir = tmpDir
+
+	// Populate fileMap
+	getFileList()
+
+	creds := parseAuthCredentials()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", serveHome)
+	mux.HandleFunc("/api/files", listFiles)
+	handler := basicAuthMiddleware(mux, creds)
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Test: home page without auth
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for unauthenticated /, got %d", resp.StatusCode)
+	}
+
+	// Test: home page with auth
+	client := &http.Client{}
+	req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+	req.SetBasicAuth("admin", "secret")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected 200 for authenticated /, got %d", resp.StatusCode)
+	}
+
+	// Test: /api/files with auth
+	req, _ = http.NewRequest("GET", ts.URL+"/api/files", nil)
+	req.SetBasicAuth("admin", "secret")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected 200 for authenticated /api/files, got %d", resp.StatusCode)
 	}
 }
 

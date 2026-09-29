@@ -69,7 +69,8 @@ WebTail can be configured through environment variables or command-line flags:
 | `LOG_DIR`            | `-logdir`       | Log directories and file patterns (see below) | `/logs`    |
 | (none)               | `-port`         | HTTP server port                           | `8080`        |
 | (none)               | `-refreshrate`  | File check interval in milliseconds        | `500`         |
-| (none)               | `-buffersize`   | Buffer size for reading file updates (bytes) | `4096`        |
+| (none)               | `-buffersize`   | Buffer size for reading file updates (bytes) | `4096`      |
+| `WEBTAIL_AUTH`       | `-auth`         | Basic auth credentials (see below)         | (none)      |
 
 ### Multiple Directories and Glob Patterns
 
@@ -90,6 +91,24 @@ The `-logdir` option supports multiple directories and file patterns, separated 
 ```
 
 When the same filename exists in multiple directories, the file list automatically disambiguates them with a directory prefix (e.g., `log1/app.log`, `log2/app.log`).
+
+### Authentication
+
+Use `-auth` to enable HTTP Basic Authentication. When not set, the server is open (no auth).
+
+```bash
+# Single user
+./gwebtail -auth "admin:123456"
+
+# Multiple users (comma or semicolon separated)
+./gwebtail -auth "admin:123456,viewer:abc123"
+
+# Via environment variable
+export WEBTAIL_AUTH="admin:123456"
+./gwebtail
+```
+
+Passwords may contain colons (only the first colon separates user from password). When auth is enabled, the browser will show a login dialog. WebSocket connections use the same credentials automatically.
 
 ## Usage
 
