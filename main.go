@@ -50,10 +50,11 @@ type FileInfo struct {
 
 // TailCommand struct for WebSocket commands
 type TailCommand struct {
-	Command   string `json:"command"`
-	File      string `json:"file,omitempty"`
-	Lines     int    `json:"lines,omitempty"` // Max number of lines to display in the UI
-	SearchStr string `json:"searchStr,omitempty"`
+	Command     string `json:"command"`
+	File        string `json:"file,omitempty"`
+	Lines       int    `json:"lines,omitempty"`       // Max number of lines to display in the UI
+	SearchStr   string `json:"searchStr,omitempty"`
+	RefreshRate int    `json:"refreshRate,omitempty"` // File check interval in milliseconds
 }
 
 // TailResponse struct for WebSocket responses
@@ -107,7 +108,7 @@ func main() {
 	// Parse command line flags
 	flag.StringVar(&config.LogDir, "logdir", "", "Directory containing log files")
 	flag.IntVar(&config.Port, "port", 8080, "HTTP server port")
-	flag.IntVar(&config.FileRefreshRate, "refreshrate", 500, "File check interval in milliseconds")
+	flag.IntVar(&config.FileRefreshRate, "refreshrate", 1000, "File check interval in milliseconds")
 	flag.Int64Var(&config.BufferSize, "buffersize", 32*1024, "Buffer size for reading file updates (bytes)")
 	flag.StringVar(&config.Auth, "auth", "", "Basic auth credentials (user:password), multiple separated by , or ;")
 	flag.Parse()
@@ -550,6 +551,19 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 				if err := wsConn.WriteJSON(response); err != nil {
 					log.Println("Error sending stop acknowledgment:", err)
+				}
+			}
+
+		case "config":
+			// Update server configuration at runtime
+			if cmd.RefreshRate > 0 {
+				config.FileRefreshRate = cmd.RefreshRate
+				log.Printf("WebSocket refresh rate updated to %dms by %s", cmd.RefreshRate, connID)
+				response := TailResponse{
+					Type: "config",
+				}
+				if err := wsConn.WriteJSON(response); err != nil {
+					log.Println("Error sending config acknowledgment:", err)
 				}
 			}
 

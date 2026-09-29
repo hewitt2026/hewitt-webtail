@@ -88,6 +88,15 @@
                             <option value="1048576">1 MB</option>
                         </select>
                     </div>
+                    <div class="input-group me-3" style="width: auto;">
+                        <label class="input-group-text" for="refresh-rate" style="font-size: 0.85rem;">Refresh:</label>
+                        <select class="form-select form-select-sm" id="refresh-rate" onchange="changeRefreshRate()" style="width: auto;">
+                            <option value="500">500 ms</option>
+                            <option value="1000" selected>1000 ms</option>
+                            <option value="2000">2000 ms</option>
+                            <option value="5000">5000 ms</option>
+                        </select>
+                    </div>
                     <button class="btn btn-outline-secondary" onclick="downloadCurrentFile()" title="Download Log File" id="download-btn" disabled>
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16">
                             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
@@ -419,6 +428,18 @@
                     const fileSelect = document.getElementById("file-select");
                     fileSelect.innerHTML =
                         '<option value="">Loading files...</option>';
+                }
+            }
+
+            // Change refresh rate from dropdown
+            function changeRefreshRate() {
+                const select = document.getElementById("refresh-rate");
+                const rate = parseInt(select.value, 10);
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        command: "config",
+                        refreshRate: rate,
+                    }));
                 }
             }
 
