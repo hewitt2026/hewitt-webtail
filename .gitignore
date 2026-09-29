@@ -1,4 +1,6 @@
 gwebtail
 logs
 gwebtail.exe
-dist/
+start.bat
+install-service.bat
+uninstall-service.bat
