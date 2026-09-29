@@ -91,6 +91,10 @@ var (
 	activeConnections = make(map[*websocket.Conn]bool)
 	connectionsMutex  = sync.Mutex{}
 	config            Config
+
+	// fileMap maps display names to full file paths, rebuilt on each getFileList call
+	fileMap      = make(map[string]string)
+	fileMapMutex sync.Mutex
 )
 
 func main() {
@@ -112,10 +116,15 @@ func main() {
 		}
 	}
 
-	// Create log directory if it doesn't exist
-	if _, err := os.Stat(config.LogDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(config.LogDir, 0755); err != nil {
-			log.Fatalf("Failed to create log directory: %v", err)
+	// Create log directories if they don't exist (skip glob patterns)
+	for _, dir := range parseLogDirs() {
+		if strings.ContainsAny(dir, "*?[") {
+			continue // Glob patterns are resolved at query time
+		}
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				log.Fatalf("Failed to create log directory %s: %v", dir, err)
+			}
 		}
 	}
 
@@ -168,27 +177,124 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// parseLogDirs splits LogDir by ',' or ';' and returns trimmed non-empty entries
+func parseLogDirs() []string {
+	parts := strings.FieldsFunc(config.LogDir, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	if len(result) == 0 {
+		result = append(result, "/logs")
+	}
+	return result
+}
+
+// isGlobPattern checks if a path contains wildcard characters
+func isGlobPattern(s string) bool {
+	return strings.ContainsAny(s, "*?[")
+}
+
+// resolveAllFiles collects files from all configured directories/globs,
+// rebuilds the fileMap, and returns display names.
+// When the same filename appears in multiple directories, it is disambiguated
+// with a "parentDir/filename" prefix.
+func resolveAllFiles() ([]string, map[string]string, error) {
+	dirs := parseLogDirs()
+
+	type fileEntry struct {
+		name     string // base filename
+		fullPath string
+	}
+	var allFiles []fileEntry
+
+	for _, dir := range dirs {
+		if isGlobPattern(dir) {
+			matches, err := filepath.Glob(dir)
+			if err != nil {
+				log.Printf("Invalid glob pattern '%s': %v", dir, err)
+				continue
+			}
+			for _, m := range matches {
+				info, err := os.Stat(m)
+				if err != nil || info.IsDir() {
+					continue
+				}
+				allFiles = append(allFiles, fileEntry{name: filepath.Base(m), fullPath: m})
+			}
+		} else {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				log.Printf("Error reading directory '%s': %v", dir, err)
+				continue
+			}
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				allFiles = append(allFiles, fileEntry{
+					name:     e.Name(),
+					fullPath: filepath.Join(dir, e.Name()),
+				})
+			}
+		}
+	}
+
+	// Count name occurrences for disambiguation
+	nameCount := make(map[string]int)
+	for _, f := range allFiles {
+		nameCount[f.name]++
+	}
+
+	// Build display-name → full-path map
+	resultMap := make(map[string]string)
+	for _, f := range allFiles {
+		displayName := f.name
+		if nameCount[f.name] > 1 {
+			parentDir := filepath.Base(filepath.Dir(f.fullPath))
+			displayName = parentDir + "/" + f.name
+		}
+		resultMap[displayName] = f.fullPath
+	}
+
+	// Collect display names
+	var names []string
+	for name := range resultMap {
+		names = append(names, name)
+	}
+
+	return names, resultMap, nil
+}
+
 // listFiles handles listing files in the log directory
 func listFiles(w http.ResponseWriter, r *http.Request) {
-	files, err := os.ReadDir(config.LogDir)
+	names, resolvedMap, err := resolveAllFiles()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error reading directory: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Error resolving files: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	// Update global fileMap
+	fileMapMutex.Lock()
+	fileMap = resolvedMap
+	fileMapMutex.Unlock()
+
 	var fileInfos []FileInfo
-	for _, file := range files {
-		if file.IsDir() {
-			continue // Skip directories
-		}
-		fileInfo, err := file.Info()
+	for _, name := range names {
+		fullPath := resolvedMap[name]
+		info, err := os.Stat(fullPath)
 		if err != nil {
-			continue // Skip files with errors
+			continue
 		}
 		fileInfos = append(fileInfos, FileInfo{
-			Name:    fileInfo.Name(),
-			Size:    fileInfo.Size(),
-			ModTime: fileInfo.ModTime().Format(time.RFC3339),
+			Name:    name,
+			Size:    info.Size(),
+			ModTime: info.ModTime().Format(time.RFC3339),
 		})
 	}
 
@@ -339,24 +445,47 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// getFileList returns a list of files in the log directory
+// getFileList returns a list of files across all configured log directories/globs
 func getFileList() ([]string, error) {
-	files, err := os.ReadDir(config.LogDir)
+	names, resolvedMap, err := resolveAllFiles()
 	if err != nil {
 		return nil, err
 	}
 
-	var fileNames []string
-	for _, file := range files {
-		if !file.IsDir() {
-			fileNames = append(fileNames, file.Name())
+	// Update global fileMap
+	fileMapMutex.Lock()
+	fileMap = resolvedMap
+	fileMapMutex.Unlock()
+
+	return names, nil
+}
+
+// resolveFilePath looks up a display name in the fileMap.
+// If not found, it tries joining the name with each configured directory as a fallback.
+func resolveFilePath(fileName string) string {
+	fileMapMutex.Lock()
+	if fullPath, ok := fileMap[fileName]; ok {
+		fileMapMutex.Unlock()
+		return fullPath
+	}
+	fileMapMutex.Unlock()
+
+	// Fallback: search across configured directories
+	for _, dir := range parseLogDirs() {
+		if isGlobPattern(dir) {
+			continue
+		}
+		candidate := filepath.Join(dir, fileName)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
 		}
 	}
-	return fileNames, nil
+	// Last resort: return as-is (for backward compatibility)
+	return filepath.Join(parseLogDirs()[0], fileName)
 }
 
 func tailFile(conn WebSocketConnection, fileName string, cancel chan bool, connID string) {
-	filePath := filepath.Join(config.LogDir, fileName)
+	filePath := resolveFilePath(fileName)
 	file, err := os.Open(filePath)
 	if err != nil {
 		sendError(conn, "Failed to open file: "+err.Error())

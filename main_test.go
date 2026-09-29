@@ -534,6 +534,369 @@ func TestHelperFunctions(t *testing.T) {
 	}
 }
 
+// TestParseLogDirs tests the parseLogDirs function
+func TestParseLogDirs(t *testing.T) {
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "single directory",
+			input:    "/var/log",
+			expected: []string{"/var/log"},
+		},
+		{
+			name:     "comma separated",
+			input:    "/var/log,/tmp/logs,/data/logs",
+			expected: []string{"/var/log", "/tmp/logs", "/data/logs"},
+		},
+		{
+			name:     "semicolon separated",
+			input:    "/var/log;/tmp/logs;/data/logs",
+			expected: []string{"/var/log", "/tmp/logs", "/data/logs"},
+		},
+		{
+			name:     "mixed separators",
+			input:    "/var/log,/tmp/logs;/data/logs",
+			expected: []string{"/var/log", "/tmp/logs", "/data/logs"},
+		},
+		{
+			name:     "with spaces",
+			input:    " /var/log , /tmp/logs ; /data/logs ",
+			expected: []string{"/var/log", "/tmp/logs", "/data/logs"},
+		},
+		{
+			name:     "with glob pattern",
+			input:    "/var/log/*.log;/data/app*.log",
+			expected: []string{"/var/log/*.log", "/data/app*.log"},
+		},
+		{
+			name:     "trailing separator",
+			input:    "/var/log,/tmp/logs,",
+			expected: []string{"/var/log", "/tmp/logs"},
+		},
+		{
+			name:     "empty string falls back to default",
+			input:    "",
+			expected: []string{"/logs"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config.LogDir = tt.input
+			result := parseLogDirs()
+			if len(result) != len(tt.expected) {
+				t.Errorf("Expected %d entries, got %d: %v", len(tt.expected), len(result), result)
+				return
+			}
+			for i, exp := range tt.expected {
+				if result[i] != exp {
+					t.Errorf("Entry %d: expected '%s', got '%s'", i, exp, result[i])
+				}
+			}
+		})
+	}
+}
+
+// TestIsGlobPattern tests the isGlobPattern function
+func TestIsGlobPattern(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"/var/log", false},
+		{"/var/log/", false},
+		{"/var/log/*.log", true},
+		{"/var/log/app?.log", true},
+		{"/var/log/[a-z]*.log", true},
+		{"*.log", true},
+	}
+
+	for _, tt := range tests {
+		result := isGlobPattern(tt.input)
+		if result != tt.expected {
+			t.Errorf("isGlobPattern(%q) = %v, want %v", tt.input, result, tt.expected)
+		}
+	}
+}
+
+// TestGetFileListMultiDir tests getFileList with multiple directories
+func TestGetFileListMultiDir(t *testing.T) {
+	// Create two temporary directories
+	tmpDir1, err := os.MkdirTemp("", "webtail-multi1")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir 1: %v", err)
+	}
+	defer os.RemoveAll(tmpDir1)
+
+	tmpDir2, err := os.MkdirTemp("", "webtail-multi2")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir 2: %v", err)
+	}
+	defer os.RemoveAll(tmpDir2)
+
+	testContent := []byte("test content")
+
+	// Create files in dir1
+	for _, fname := range []string{"app.log", "error.log"} {
+		if err := os.WriteFile(filepath.Join(tmpDir1, fname), testContent, 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+	}
+
+	// Create files in dir2
+	for _, fname := range []string{"access.log", "debug.log"} {
+		if err := os.WriteFile(filepath.Join(tmpDir2, fname), testContent, 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+	}
+
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+
+	// Test with comma separator
+	config.LogDir = tmpDir1 + "," + tmpDir2
+	files, err := getFileList()
+	if err != nil {
+		t.Fatalf("getFileList failed: %v", err)
+	}
+
+	if len(files) != 4 {
+		t.Errorf("Expected 4 files, got %d: %v", len(files), files)
+	}
+
+	fileSet := make(map[string]bool)
+	for _, f := range files {
+		fileSet[f] = true
+	}
+
+	for _, expected := range []string{"app.log", "error.log", "access.log", "debug.log"} {
+		if !fileSet[expected] {
+			t.Errorf("Expected file %s not found in result", expected)
+		}
+	}
+
+	// Test with semicolon separator
+	config.LogDir = tmpDir1 + ";" + tmpDir2
+	files, err = getFileList()
+	if err != nil {
+		t.Fatalf("getFileList failed with semicolon: %v", err)
+	}
+	if len(files) != 4 {
+		t.Errorf("Expected 4 files with semicolon separator, got %d", len(files))
+	}
+}
+
+// TestGetFileListGlob tests getFileList with glob patterns
+func TestGetFileListGlob(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "webtail-glob")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testContent := []byte("test content")
+
+	// Create files with different extensions
+	for _, fname := range []string{"app.log", "error.log", "data.csv", "config.txt"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, fname), testContent, 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+	}
+
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+
+	// Test with glob pattern - only .log files
+	config.LogDir = filepath.Join(tmpDir, "*.log")
+	files, err := getFileList()
+	if err != nil {
+		t.Fatalf("getFileList failed: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("Expected 2 .log files, got %d: %v", len(files), files)
+	}
+
+	fileSet := make(map[string]bool)
+	for _, f := range files {
+		fileSet[f] = true
+	}
+
+	if !fileSet["app.log"] {
+		t.Errorf("Expected app.log in results")
+	}
+	if !fileSet["error.log"] {
+		t.Errorf("Expected error.log in results")
+	}
+	if fileSet["data.csv"] {
+		t.Errorf("data.csv should not be in results for *.log pattern")
+	}
+}
+
+// TestGetFileListGlobPrefix tests getFileList with prefix glob patterns like app*.log
+func TestGetFileListGlobPrefix(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "webtail-glob-prefix")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testContent := []byte("test content")
+
+	for _, fname := range []string{"app-server.log", "app-client.log", "error.log", "app.data"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, fname), testContent, 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+	}
+
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+
+	config.LogDir = filepath.Join(tmpDir, "app*.log")
+	files, err := getFileList()
+	if err != nil {
+		t.Fatalf("getFileList failed: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("Expected 2 files matching app*.log, got %d: %v", len(files), files)
+	}
+}
+
+// TestGetFileListDisambiguation tests that files with the same name in different dirs are disambiguated
+func TestGetFileListDisambiguation(t *testing.T) {
+	tmpDir1, err := os.MkdirTemp("", "webtail-disamb1")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir 1: %v", err)
+	}
+	defer os.RemoveAll(tmpDir1)
+
+	tmpDir2, err := os.MkdirTemp("", "webtail-disamb2")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir 2: %v", err)
+	}
+	defer os.RemoveAll(tmpDir2)
+
+	testContent := []byte("test content")
+
+	// Create a file with the same name in both directories
+	if err := os.WriteFile(filepath.Join(tmpDir1, "app.log"), testContent, 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir2, "app.log"), testContent, 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+
+	config.LogDir = tmpDir1 + "," + tmpDir2
+	files, err := getFileList()
+	if err != nil {
+		t.Fatalf("getFileList failed: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("Expected 2 disambiguated entries, got %d: %v", len(files), files)
+	}
+
+	// Both entries should contain a directory prefix
+	for _, f := range files {
+		if !strings.Contains(f, "/") {
+			t.Errorf("Expected disambiguated name with '/', got '%s'", f)
+		}
+	}
+
+	// Check that fileMap resolves correctly
+	fileMapMutex.Lock()
+	for _, fullPath := range fileMap {
+		if _, err := os.Stat(fullPath); err != nil {
+			t.Errorf("fileMap entry '%s' does not resolve to a valid file", fullPath)
+		}
+	}
+	fileMapMutex.Unlock()
+}
+
+// TestResolveFilePath tests the resolveFilePath function
+func TestResolveFilePath(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "webtail-resolve")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testContent := []byte("test content")
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.log"), testContent, 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+
+	config.LogDir = tmpDir
+
+	// Populate fileMap via getFileList
+	_, err = getFileList()
+	if err != nil {
+		t.Fatalf("getFileList failed: %v", err)
+	}
+
+	// Test resolving a known file
+	resolved := resolveFilePath("test.log")
+	expected := filepath.Join(tmpDir, "test.log")
+	if resolved != expected {
+		t.Errorf("Expected resolved path '%s', got '%s'", expected, resolved)
+	}
+}
+
+// TestListFilesMultiDir tests the HTTP handler with multiple directories
+func TestListFilesMultiDir(t *testing.T) {
+	tmpDir1, err := os.MkdirTemp("", "webtail-http-multi1")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir 1: %v", err)
+	}
+	defer os.RemoveAll(tmpDir1)
+
+	tmpDir2, err := os.MkdirTemp("", "webtail-http-multi2")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir 2: %v", err)
+	}
+	defer os.RemoveAll(tmpDir2)
+
+	testContent := []byte("test content")
+	os.WriteFile(filepath.Join(tmpDir1, "a.log"), testContent, 0644)
+	os.WriteFile(filepath.Join(tmpDir2, "b.log"), testContent, 0644)
+
+	oldLogDir := config.LogDir
+	defer func() { config.LogDir = oldLogDir }()
+
+	config.LogDir = tmpDir1 + "," + tmpDir2
+
+	req := httptest.NewRequest("GET", "/api/files", nil)
+	w := httptest.NewRecorder()
+
+	listFiles(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var fileInfos []FileInfo
+	if err := json.NewDecoder(w.Body).Decode(&fileInfos); err != nil {
+		t.Fatalf("Failed to decode JSON response: %v", err)
+	}
+
+	if len(fileInfos) != 2 {
+		t.Errorf("Expected 2 files, got %d", len(fileInfos))
+	}
+}
+
 // TestMiddleware tests the logging middleware
 func TestMiddleware(t *testing.T) {
 	// Create a test handler that just returns 200 OK

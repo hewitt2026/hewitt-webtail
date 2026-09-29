@@ -66,10 +66,30 @@ WebTail can be configured through environment variables or command-line flags:
 
 | Environment Variable | Flag            | Description                                | Default       |
 |----------------------|-----------------|--------------------------------------------|--------------:|
-| `LOG_DIR`            | `-logdir`       | Directory containing log files             | `/logs`       |
+| `LOG_DIR`            | `-logdir`       | Log directories and file patterns (see below) | `/logs`    |
 | (none)               | `-port`         | HTTP server port                           | `8080`        |
 | (none)               | `-refreshrate`  | File check interval in milliseconds        | `500`         |
 | (none)               | `-buffersize`   | Buffer size for reading file updates (bytes) | `4096`        |
+
+### Multiple Directories and Glob Patterns
+
+The `-logdir` option supports multiple directories and file patterns, separated by `,` or `;`:
+
+```bash
+# Multiple directories
+./gwebtail -logdir "/var/log,/tmp/logs,/data/logs"
+
+# Glob patterns to filter files
+./gwebtail -logdir "/var/log/*.log"
+
+# Prefix patterns
+./gwebtail -logdir "/var/log/app*.log;/data/server*.log"
+
+# Mix directories and patterns
+./gwebtail -logdir "/var/log,/data/logs/*.log,/tmp/debug*.log"
+```
+
+When the same filename exists in multiple directories, the file list automatically disambiguates them with a directory prefix (e.g., `log1/app.log`, `log2/app.log`).
 
 ## Usage
 
