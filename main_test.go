@@ -1196,3 +1196,65 @@ func TestMiddleware(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 }
+
+// TestBasePath tests the configurable base path feature
+func TestBasePath(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "webtail-basepath")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testContent := []byte("test log content")
+	os.WriteFile(filepath.Join(tmpDir, "test.log"), testContent, 0644)
+
+	oldLogDir := config.LogDir
+	oldBasePath := config.BasePath
+	defer func() {
+		config.LogDir = oldLogDir
+		config.BasePath = oldBasePath
+	}()
+
+	config.LogDir = tmpDir
+	config.BasePath = "/plm-webtail"
+
+	// Populate fileMap
+	getFileList()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(config.BasePath+"/", serveHome)
+	mux.HandleFunc(config.BasePath+"/api/files", listFiles)
+	mux.HandleFunc(config.BasePath+"/api/download", downloadFile)
+
+	// Test: home page at base path
+	req := httptest.NewRequest("GET", "/plm-webtail/", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200 for base path home, got %d", w.Code)
+	}
+
+	// Test: home page at wrong path returns 404
+	req = httptest.NewRequest("GET", "/", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for root path with basepath set, got %d", w.Code)
+	}
+
+	// Test: API at base path
+	req = httptest.NewRequest("GET", "/plm-webtail/api/files", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200 for base path API, got %d", w.Code)
+	}
+
+	// Test: download at base path
+	req = httptest.NewRequest("GET", "/plm-webtail/api/download?file=test.log", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200 for base path download, got %d", w.Code)
+	}
+}

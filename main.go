@@ -40,6 +40,7 @@ type Config struct {
 	FileRefreshRate int // Milliseconds between file checks
 	BufferSize      int64
 	Auth            string // Auth credentials in user:password format, multiple separated by , or ;
+	BasePath        string // URL base path prefix (e.g. "/plm-webtail"), empty means root
 }
 
 // FileInfo struct for listing files
@@ -112,6 +113,7 @@ func main() {
 	flag.IntVar(&config.FileRefreshRate, "refreshrate", 1000, "File check interval in milliseconds")
 	flag.Int64Var(&config.BufferSize, "buffersize", 32*1024, "Buffer size for reading file updates (bytes)")
 	flag.StringVar(&config.Auth, "auth", "", "Basic auth credentials (user:password), multiple separated by , or ;")
+	flag.StringVar(&config.BasePath, "basepath", "", "URL base path prefix (e.g. /plm-webtail), default: root")
 	var logFile string
 	flag.StringVar(&logFile, "logfile", "", "Log file path (default: stderr)")
 	flag.Parse()
@@ -139,6 +141,18 @@ func main() {
 		config.Auth = os.Getenv("WEBTAIL_AUTH")
 	}
 
+	// Check if basepath is set from environment variable
+	if config.BasePath == "" {
+		config.BasePath = os.Getenv("WEBTAIL_BASEPATH")
+	}
+	// Normalize basepath: ensure leading /, no trailing /
+	if config.BasePath != "" {
+		if !strings.HasPrefix(config.BasePath, "/") {
+			config.BasePath = "/" + config.BasePath
+		}
+		config.BasePath = strings.TrimRight(config.BasePath, "/")
+	}
+
 	// Create log directories if they don't exist (skip glob patterns)
 	for _, dir := range parseLogDirs() {
 		if strings.ContainsAny(dir, "*?[") {
@@ -162,15 +176,17 @@ func main() {
 
 // runServer sets up and starts the HTTP server
 func runServer() {
+	base := config.BasePath // "" or "/plm-webtail"
+
 	// Set up HTTP handlers with logging middleware
 	loggedMux := http.NewServeMux()
-	loggedMux.HandleFunc("/", serveHome)
-	loggedMux.HandleFunc("/api/files", listFiles)
-	loggedMux.HandleFunc("/api/download", downloadFile)
-	loggedMux.HandleFunc("/ws", handleWebSocket)
+	loggedMux.HandleFunc(base+"/", serveHome)
+	loggedMux.HandleFunc(base+"/api/files", listFiles)
+	loggedMux.HandleFunc(base+"/api/download", downloadFile)
+	loggedMux.HandleFunc(base+"/ws", handleWebSocket)
 
 	// Add route to serve embedded bootstrap.min.css
-	loggedMux.HandleFunc("/assets/css/bootstrap.min.css", func(w http.ResponseWriter, r *http.Request) {
+	loggedMux.HandleFunc(base+"/assets/css/bootstrap.min.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
 		w.Write(bootstrapCSS)
 	})
@@ -189,7 +205,7 @@ func runServer() {
 
 	// Start HTTP server
 	addr := fmt.Sprintf(":%d", config.Port)
-	log.Printf("Starting WebTail server on %s with log directory: %s", addr, config.LogDir)
+	log.Printf("Starting WebTail server on %s%s with log directory: %s", addr, base, config.LogDir)
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
@@ -273,7 +289,8 @@ func basicAuthMiddleware(next http.Handler, creds map[string]string) http.Handle
 
 // serveHome handles the home page
 func serveHome(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	expectedPath := config.BasePath + "/"
+	if r.URL.Path != expectedPath {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
