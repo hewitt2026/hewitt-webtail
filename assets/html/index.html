@@ -56,6 +56,15 @@
                 background-color: yellow;
                 color: black;
             }
+            .hidden-indicator {
+                background: #fff3cd;
+                color: #856404;
+                padding: 4px 12px;
+                font-size: 11px;
+                border-top: 1px solid #ffc107;
+                text-align: center;
+                display: none;
+            }
         </style>
     </head>
     <body>
@@ -87,7 +96,10 @@
                     <option value="2000">2000ms</option>
                     <option value="5000">5000ms</option>
                 </select>
-                <button class="btn btn-outline-secondary btn-sm" onclick="downloadCurrentFile()" title="Download Log File" id="download-btn" disabled>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="isPaused ? resumeTailing() : pauseTailing()" title="Pause" id="pause-btn" disabled>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-pause-fill" viewBox="0 0 16 16"><path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5"/></svg>
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="downloadCurrentFile()" title="Download Log File" id="download-btn" disabled>
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16">
                             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
                             <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
@@ -117,6 +129,7 @@
                     </div>
                 </div>
             </div>
+            <div class="hidden-indicator" id="hidden-indicator"></div>
         </div>
 
         <script>
@@ -129,6 +142,33 @@
             let tailCancel = false;
             let fullLogContent = []; // Store the complete log content
             let MAX_BUFFER_SIZE = 32 * 1024; // 32KB default, user-adjustable
+            let isFollowing = true; // Whether user is at bottom (smart follow)
+            let isPaused = false; // Whether tailing is fully paused
+            let hiddenLineCount = 0; // Count of lines not rendered while not following
+
+            // Check if log content is scrolled to bottom (within 50px threshold)
+            function isAtBottom() {
+                const el = document.getElementById("log-content");
+                return el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+            }
+
+            // Scroll event listener for smart follow
+            function onLogScroll() {
+                const wasFollowing = isFollowing;
+                isFollowing = isAtBottom();
+
+                // If user scrolled back to bottom, flush hidden lines
+                if (!wasFollowing && isFollowing) {
+                    flushHiddenLines();
+                }
+
+                updatePauseIndicator();
+            }
+
+            // Initialize scroll listener
+            document.addEventListener("DOMContentLoaded", function () {
+                document.getElementById("log-content").addEventListener("scroll", onLogScroll);
+            });
 
             // Connect to WebSocket
             function connectWebSocket() {
@@ -239,6 +279,9 @@
                 // Start WebSocket tailing automatically after file selection
                 currentFile = file;
                 fullLogContent = [];
+                isFollowing = true;
+                isPaused = false;
+                hiddenLineCount = 0;
                 window.location.hash = encodeURIComponent(file);
                 const fileSelect = document.getElementById("file-select");
                 if (fileSelect.value !== file) {
@@ -253,9 +296,12 @@
                 `;
                 // Update the page title when a file is selected
                 document.title = `Viewing: ${file} - gWebTail`;
-                // Enable download button
+                // Enable download and pause buttons
                 const dlBtn = document.getElementById("download-btn");
                 if (dlBtn) dlBtn.disabled = false;
+                const pauseBtn = document.getElementById("pause-btn");
+                if (pauseBtn) pauseBtn.disabled = false;
+                updatePauseButton();
                 startTailing(); // Automatically start tailing
             }
 
@@ -295,6 +341,38 @@
 
                     isTailing = false;
                     tailCancel = true;
+                }
+            }
+
+            // Pause tailing (full stop, no new data received)
+            function pauseTailing() {
+                if (!currentFile || isPaused) return;
+                stopTailing();
+                isPaused = true;
+                updatePauseButton();
+                updatePauseIndicator();
+            }
+
+            // Resume tailing from current position
+            function resumeTailing() {
+                if (!currentFile || !isPaused) return;
+                isPaused = false;
+                hiddenLineCount = 0;
+                updatePauseButton();
+                updatePauseIndicator();
+                tailFile(currentFile);
+            }
+
+            // Update pause button text/state
+            function updatePauseButton() {
+                const btn = document.getElementById("pause-btn");
+                if (!btn) return;
+                if (isPaused) {
+                    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-play-fill" viewBox="0 0 16 16"><path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/></svg>';
+                    btn.title = "Resume";
+                } else {
+                    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-pause-fill" viewBox="0 0 16 16"><path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5"/></svg>';
+                    btn.title = "Pause";
                 }
             }
 
@@ -341,8 +419,36 @@
                 fullLogContent = fullLogContent.concat(lines);
                 trimBufferIfNeeded();
 
-                // Re-render the log content with the updated data
+                if (isFollowing) {
+                    // Render normally when following
+                    renderLogContent();
+                } else {
+                    // Count hidden lines and show indicator
+                    hiddenLineCount += Array.isArray(lines) ? lines.length : 1;
+                    updatePauseIndicator();
+                }
+            }
+
+            // Flush hidden lines when user scrolls back to bottom
+            function flushHiddenLines() {
+                hiddenLineCount = 0;
                 renderLogContent();
+            }
+
+            // Update pause/hidden lines indicator
+            function updatePauseIndicator() {
+                const indicator = document.getElementById("hidden-indicator");
+                if (!indicator) return;
+
+                if (isPaused) {
+                    indicator.textContent = "⏸ Paused";
+                    indicator.style.display = "block";
+                } else if (hiddenLineCount > 0) {
+                    indicator.textContent = `⬇ ${hiddenLineCount} new line${hiddenLineCount > 1 ? "s" : ""} (scroll to bottom to view)`;
+                    indicator.style.display = "block";
+                } else {
+                    indicator.style.display = "none";
+                }
             }
 
             // Render the log content with current search settings
@@ -369,7 +475,7 @@
 
                 logContent.innerHTML = html;
 
-                if (document.getElementById("auto-scroll").checked) {
+                if (isFollowing) {
                     logContent.scrollTop = logContent.scrollHeight;
                 }
             }
