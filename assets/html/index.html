@@ -65,6 +65,10 @@
                 text-align: center;
                 display: none;
             }
+            #file-stats {
+                font-size: 11px;
+                white-space: nowrap;
+            }
         </style>
     </head>
     <body>
@@ -145,6 +149,40 @@
             let isFollowing = true; // Whether user is at bottom (smart follow)
             let isPaused = false; // Whether tailing is fully paused
             let hiddenLineCount = 0; // Count of lines not rendered while not following
+            let totalLinesReceived = 0; // Total lines received for stats
+
+            // Update file stats display
+            function updateStats() {
+                const el = document.getElementById("file-stats");
+                if (!el) return;
+
+                const parts = [];
+
+                // Connection status
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    parts.push('<span style="color:#dc3545">● Disconnected</span>');
+                } else if (isPaused) {
+                    parts.push('<span style="color:#ffc107">● Paused</span>');
+                } else {
+                    parts.push('<span style="color:#28a745">● Connected</span>');
+                }
+
+                // Current file
+                if (currentFile) {
+                    parts.push(`File: ${currentFile}`);
+                }
+
+                // Line count
+                if (totalLinesReceived > 0) {
+                    parts.push(`Lines: ${totalLinesReceived.toLocaleString()}`);
+                }
+
+                // Buffer size
+                const bufferSizeMB = (MAX_BUFFER_SIZE / 1024 / 1024).toFixed(MAX_BUFFER_SIZE >= 1048576 ? 0 : 1);
+                parts.push(`Buffer: ${bufferSizeMB}MB`);
+
+                el.innerHTML = parts.join(' &nbsp;|&nbsp; ');
+            }
 
             // Check if log content is scrolled to bottom (within 50px threshold)
             function isAtBottom() {
@@ -181,9 +219,11 @@
 
                 ws.onopen = function () {
                     refreshFiles();
+                    updateStats();
                 };
 
                 ws.onclose = function () {
+                    updateStats();
                     if (autoReconnect) {
                         setTimeout(connectWebSocket, 3000);
                     }
@@ -282,6 +322,7 @@
                 isFollowing = true;
                 isPaused = false;
                 hiddenLineCount = 0;
+                totalLinesReceived = 0;
                 window.location.hash = encodeURIComponent(file);
                 const fileSelect = document.getElementById("file-select");
                 if (fileSelect.value !== file) {
@@ -351,6 +392,7 @@
                 isPaused = true;
                 updatePauseButton();
                 updatePauseIndicator();
+                updateStats();
             }
 
             // Resume tailing from current position
@@ -360,6 +402,7 @@
                 hiddenLineCount = 0;
                 updatePauseButton();
                 updatePauseIndicator();
+                updateStats();
                 tailFile(currentFile);
             }
 
@@ -417,6 +460,7 @@
 
                 // Add new lines to our stored log content
                 fullLogContent = fullLogContent.concat(lines);
+                totalLinesReceived += Array.isArray(lines) ? lines.length : 1;
                 trimBufferIfNeeded();
 
                 if (isFollowing) {
@@ -478,6 +522,8 @@
                 if (isFollowing) {
                     logContent.scrollTop = logContent.scrollHeight;
                 }
+
+                updateStats();
             }
 
             // Highlight search text in a line
